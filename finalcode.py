@@ -43,14 +43,14 @@ if process_btn:
             progress_bar = st.progress(0)
             
             with st.spinner('กำลังประมวลผล...'):
-                # Step 1
+                # Step 1: อ่านไฟล์
                 status_placeholder.write("⏳ 1/4: กำลังอ่านไฟล์...")
                 df_logic = pd.read_excel(file_logic)
                 df_m = pd.read_excel(file_mileage, header=2)
                 df_new = pd.read_excel(file_input, skiprows=2)
                 progress_bar.progress(25)
 
-                # Step 2
+                # Step 2: จัดการทะเบียนและไมล์ปัจจุบัน
                 status_placeholder.write("⏳ 2/4: กำลังตรวจสอบทะเบียนและประวัติล่าสุด...")
                 df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_m['เลขไมล์สิ้นสุด'] = pd.to_numeric(df_m['เลขไมล์สิ้นสุด'].astype(str).str.replace(',', ''), errors='coerce')
@@ -61,7 +61,7 @@ if process_btn:
                 df_new['ไมล์ปัจจุบัน'] = df_new['ทะเบียน_Clean'].map(mileage_dict)
                 progress_bar.progress(50)
 
-                # Step 3
+                # Step 3: คำนวณนัดหมาย
                 status_placeholder.write("⏳ 3/4: กำลังคำนวณวันนัดหมายถัดไป...")
                 def calculate_service(row):
                     detail = str(row['รายละเอียดการเข้าศูนย์']).lower()
@@ -80,18 +80,17 @@ if process_btn:
                     if not found_items: found_items = ["ตรวจเช็คทั่วไป"]
                     
                     raw_km = str(row['เลขไมล์ที่เข้าศูนย์บริการ']).replace(',', '')
-                    curr_km = float(raw_km) if raw_km != 'nan' else 0
+                    curr_km = float(raw_km) if raw_km != 'nan' and raw_km.strip() != '' else 0
                     
                     date_in = pd.to_datetime(row['วันที่เข้าศูนย์บริการ'], dayfirst=True, errors='coerce')
                     next_date = date_in + timedelta(days=int(plus_mo * 30.44)) if pd.notna(date_in) else None
                     
-                    # คืนค่าเพิ่ม: ไมล์นัดหมาย, วันนัดหมาย, รายการ, ไมล์ที่เข้าล่าสุด, วันที่เข้าล่าสุด
                     return pd.Series([curr_km + plus_km, next_date, ", ".join(found_items), curr_km, date_in])
 
                 df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calculate_service, axis=1)
                 progress_bar.progress(75)
 
-                # Step 4
+                # Step 4: แจ้งเตือน 3 ระดับ
                 status_placeholder.write("⏳ 4/4: สรุปสถานะ 3 ระดับ (แดง/เหลือง/เขียว)...")
                 today = datetime.now()
 
@@ -105,21 +104,16 @@ if process_btn:
                     diff_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
                     diff_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
                     
-                    # 1. สีแดง: ถึงกำหนดแล้ว
                     if diff_km <= 0 or diff_days <= 0:
                         return f"🔴 ถึงกำหนด ({row['รายการ']})"
-                    
-                    # 2. สีเหลือง: ใกล้ถึงกำหนด
                     elif diff_km <= warning_km or diff_days <= warning_days:
                         return f"🟡 ใกล้ถึง (เหลือ {int(diff_km):,} กม.)"
-                    
-                    # 3. สีเขียว: ปกติ
                     else:
                         return "🟢 ปกติ"
 
                 df_new['สถานะการแจ้งเตือน'] = df_new.apply(get_status, axis=1)
                 
-                # แปลงตัวเลขให้สวยงาม
+                # แปลงตัวเลขเป็น Integer
                 for col in ['ไมล์ปัจจุบัน', 'ไมล์นัดหมาย', 'ไมล์ที่เข้าล่าสุด']:
                     df_new[col] = pd.to_numeric(df_new[col], errors='coerce').fillna(0).astype(int)
 
@@ -153,14 +147,7 @@ if process_btn:
             with col_table:
                 st.write("📋 ตารางตรวจสอบประวัติและสถานะล่าสุด")
                 
-                # จัดลำดับคอลัมน์ให้อ่านง่าย
-                output_columns = [
-                    'ป้ายทะเบียนรถ', 
-                    'วันที่เข้าล่าสุด', 
-                    'ไมล์ที่เข้าล่าสุด', 
-                    'ไมล์ปัจจุบัน', 
-                    'สถานะการแจ้งเตือน'
-                ]
+                output_columns = ['ป้ายทะเบียนรถ', 'วันที่เข้าล่าสุด', 'ไมล์ที่เข้าล่าสุด', 'ไมล์ปัจจุบัน', 'สถานะการแจ้งเตือน']
                 
                 def color_row(val):
                     if '🔴' in val: return 'background-color: #ffebee'
@@ -168,9 +155,14 @@ if process_btn:
                     if '🟢' in val: return 'background-color: #e8f5e9'
                     return ''
                 
-                # แสดงผลตารางพร้อม Format
+                # --- แก้ไขจุดวันที่เพื่อป้องกัน Error ---
                 df_show = df_new[output_columns].copy()
-                df_show['วันที่เข้าล่าสุด'] = df_show['วันที่เข้าล่าสุด'].dt.strftime('%d/%m/%Y')
+                df_show['วันที่เข้าล่าสุด'] = pd.to_datetime(df_show['วันที่เข้าล่าสุด'], errors='coerce')
+                
+                # ใช้ .apply แทน .dt.strftime เพื่อความปลอดภัยกับค่า NaT
+                df_show['วันที่เข้าล่าสุด'] = df_show['วันที่เข้าล่าสุด'].apply(
+                    lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "ไม่ระบุ"
+                )
                 
                 st.dataframe(
                     df_show.style.applymap(color_row, subset=['สถานะการแจ้งเตือน'])
