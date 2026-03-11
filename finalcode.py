@@ -97,6 +97,11 @@ if process_btn:
                     return f"🔴 ถึงกำหนด ({row['รายการ']})" if is_overdue else "🟢 ปกติ"
 
                 df_new['สถานะการแจ้งเตือน'] = df_new.apply(get_status, axis=1)
+                
+                # --- [จุดปรับปรุง] แปลงตัวเลขเป็น Integer ก่อนแสดงผล/ส่งออก ---
+                df_new['ไมล์ปัจจุบัน'] = pd.to_numeric(df_new['ไมล์ปัจจุบัน'], errors='coerce').fillna(0).astype(int)
+                df_new['ไมล์นัดหมาย'] = pd.to_numeric(df_new['ไมล์นัดหมาย'], errors='coerce').fillna(0).astype(int)
+                
                 progress_bar.progress(100)
                 status_placeholder.success("✅ ประมวลผลเสร็จสมบูรณ์!")
 
@@ -114,7 +119,6 @@ if process_btn:
             col_chart, col_table = st.columns([1, 2])
             with col_chart:
                 st.write("📊 สัดส่วนสถานะ")
-                # แก้ไขจุดที่เคย Error: มั่นใจว่าวงเล็บปิดครบถ้วน
                 chart_data = pd.DataFrame({
                     'สถานะ': ['ถึงกำหนด', 'ปกติ'], 
                     'จำนวน': [num_overdue, num_ok]
@@ -128,7 +132,14 @@ if process_btn:
                 def color_row(val):
                     color = '#ffebee' if '🔴' in val else '#e8f5e9' if '🟢' in val else 'white'
                     return f'background-color: {color}'
-                st.dataframe(df_new[['ป้ายทะเบียนรถ', 'ไมล์ปัจจุบัน', 'สถานะการแจ้งเตือน']].style.applymap(color_row, subset=['สถานะการแจ้งเตือน']), use_container_width=True)
+                
+                # --- [จุดปรับปรุง] จัดรูปแบบตัวเลขในตารางให้สวยงาม (มีคอมมา ไม่มีทศนิยม) ---
+                st.dataframe(
+                    df_new[['ป้ายทะเบียนรถ', 'ไมล์ปัจจุบัน', 'สถานะการแจ้งเตือน']]
+                    .style.applymap(color_row, subset=['สถานะการแจ้งเตือน'])
+                    .format({"ไมล์ปัจจุบัน": "{:,d}"}), # แสดงผลแบบตัวเลขจำนวนเต็มมีคอมมา
+                    use_container_width=True
+                )
 
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
