@@ -61,32 +61,25 @@ def preview_outlook_windows(to, cc, subject, body):
 # --- ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (Sort ข้อมูล) ---
 st.subheader("🛠️ ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (จัดระเบียบข้อมูลก่อน)")
 with st.expander("🪄 คลิกเพื่อใช้งานเครื่องมือจัดกลุ่มทะเบียนรถ (Input_Service_Sorted)"):
-    st.info("ใช้สำหรับจัดกลุ่มรถทะเบียนเดียวกันให้อยู่ติดกัน และเรียงวันที่จากเก่าไปใหม่ เพื่อความแม่นยำ")
     prep_file = st.file_uploader("อัปโหลดไฟล์ Input_Service_Data.xlsx", type=['xlsx'], key="prep_tool")
-    
     if prep_file:
         if st.button("🚀 กดจัดกลุ่มข้อมูล"):
             try:
                 df_prep = pd.read_excel(prep_file, skiprows=2)
                 df_prep.columns = df_prep.columns.str.strip()
-                
                 p_date_col = 'วันที่เข้าศูนย์บริการ'
                 if p_date_col not in df_prep.columns:
                     for c in df_prep.columns:
                         if 'วันที่' in str(c): p_date_col = c; break
-                
                 df_prep['tmp_date'] = df_prep[p_date_col].apply(parse_thai_date)
                 df_prep = df_prep.sort_values(by=['ป้ายทะเบียนรถ', 'tmp_date'], ascending=[True, True])
                 df_prep = df_prep.drop(columns=['tmp_date'])
-                
                 output_prep = io.BytesIO()
                 with pd.ExcelWriter(output_prep, engine='xlsxwriter') as writer:
                     df_prep.to_excel(writer, index=False, startrow=2)
-                
-                st.success("✅ จัดระเบียบเสร็จแล้ว! กรุณาดาวน์โหลดไปใช้ในขั้นตอนที่ 1")
+                st.success("✅ จัดระเบียบเสร็จแล้ว! ดาวน์โหลดไปใช้ในขั้นตอนที่ 1 ได้เลย")
                 st.download_button("📥 ดาวน์โหลดไฟล์ Sorted", output_prep.getvalue(), "Input_Service_Sorted.xlsx")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+            except Exception as e: st.error(f"❌ Error: {e}")
 
 st.divider()
 
@@ -102,131 +95,117 @@ with st.sidebar:
 
 if process_btn:
     if not (file_input and file_mileage and file_logic and file_email):
-        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบทั้ง 4 ช่อง!")
+        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบ!")
     else:
         try:
-            with st.spinner('กำลังคำนวณและดึงข้อมูล Email...'):
+            with st.spinner('กำลังประมวลผล...'):
                 df_logic = pd.read_excel(file_logic)
                 df_m = pd.read_excel(file_mileage, header=2)
                 df_new = pd.read_excel(file_input, skiprows=2)
-                # อ่าน Sheet "เงื่อนไข" ตามภาพที่พี่ส่งมา
                 df_email = pd.read_excel(file_email, sheet_name='เงื่อนไข')
                 
                 df_new.columns = df_new.columns.str.strip()
                 df_email.columns = df_email.columns.str.strip()
 
                 # --- ค้นหาคอลัมน์ชื่อพนักงานในไฟล์หลัก ---
-                name_col = ""
-                potential_cols = ['ชื่อคนขับ', 'ชื่อผู้รับผิดชอบ', 'ชื่อพนักงาน', 'ชื่อ-นามสกุล']
-                for c in potential_cols:
-                    if c in df_new.columns: name_col = c; break
-                if not name_col: name_col = df_new.columns[0] # ถ้าหาไม่เจอเอาคอลัมน์แรก
+                # ปรับให้หาคำว่า 'ชื่อ' หรือ 'พนักงาน' เพื่อความแม่นยำ
+                name_col_main = ""
+                for c in df_new.columns:
+                    if any(x in str(c) for x in ['ชื่อ', 'พนักงาน', 'ผู้รับผิดชอบ']):
+                        name_col_main = c
+                        break
+                
+                # --- เตรียมข้อมูล Email สำหรับ Merge ---
+                # ลบช่องว่างในชื่อทั้งสองฝั่งเพื่อป้องกันการหาไม่เจอ
+                df_email['Name_Clean'] = df_email['Name'].astype(str).str.replace(' ', '').str.strip()
+                if name_col_main:
+                    df_new['Name_Match'] = df_new[name_col_main].astype(str).str.replace(' ', '').str.strip()
+                else:
+                    df_new['Name_Match'] = ""
 
-                # --- Logic ประมวลผลหลัก ---
+                # --- ประมวลผลเลขไมล์ ---
                 df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_m['เลขไมล์สิ้นสุด'] = pd.to_numeric(df_m['เลขไมล์สิ้นสุด'].astype(str).str.replace(',', ''), errors='coerce')
                 mileage_dict = df_m.dropna(subset=['เลขไมล์สิ้นสุด']).groupby('Key')['เลขไมล์สิ้นสุด'].last().to_dict()
                 
-                df_new = df_new.dropna(subset=['ป้ายทะเบียนรถ'])
                 df_new['ทะเบียน_Clean'] = df_new['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_new['ไมล์ปัจจุบัน'] = df_new['ทะเบียน_Clean'].map(mileage_dict).fillna(0)
 
-                target_date_col = 'วันที่เข้าศูนย์บริการ'
+                # --- คำนวณ Logic งานบริการ ---
+                t_date_col = 'วันที่เข้าศูนย์บริการ'
                 for c in df_new.columns:
-                    if 'วันที่' in str(c): target_date_col = c; break
+                    if 'วันที่' in str(c): t_date_col = c; break
 
-                def calculate_service(row):
-                    detail = str(row.get('รายละเอียดการเข้าศูนย์', '')).lower()
-                    plus_km, plus_mo = 10000.0, 6.0
-                    found_items = []
+                def calc_serv(row):
+                    det = str(row.get('รายละเอียดการเข้าศูนย์', '')).lower()
+                    p_km, p_mo = 10000.0, 6.0
+                    items = []
                     for _, lg in df_logic.iterrows():
                         kw = re.sub(r'\(.*\)', '', str(lg['รายการอะไหล่/การบริการ'])).lower().strip()
-                        if kw in detail:
-                            found_items.append(str(lg['รายการอะไหล่/การบริการ']))
-                            if pd.notna(lg['ระยะเปลี่ยนถ่าย (กม.)']): plus_km = min(plus_km, float(lg['ระยะเปลี่ยนถ่าย (กม.)']))
-                            if pd.notna(lg['ระยะเวลา (เดือน)']): plus_mo = min(plus_mo, float(lg['ระยะเวลา (เดือน)']))
-                    if not found_items: found_items = ["ตรวจเช็คทั่วไป"]
-                    km_val = str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')).replace(',', '')
-                    curr_km = float(km_val) if km_val != 'nan' and km_val.strip() != '' else 0
-                    date_in = parse_thai_date(row.get(target_date_col))
-                    next_date = date_in + timedelta(days=int(plus_mo * 30.44)) if pd.notna(date_in) else None
-                    return pd.Series([curr_km + plus_km, next_date, ", ".join(found_items), curr_km, date_in])
+                        if kw in det:
+                            items.append(str(lg['รายการอะไหล่/การบริการ']))
+                            if pd.notna(lg['ระยะเปลี่ยนถ่าย (กม.)']): p_km = min(p_km, float(lg['ระยะเปลี่ยนถ่าย (กม.)']))
+                            if pd.notna(lg['ระยะเวลา (เดือน)']): p_mo = min(p_mo, float(lg['ระยะเวลา (เดือน)']))
+                    if not items: items = ["ตรวจเช็คทั่วไป"]
+                    km_in = float(str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')).replace(',', '')) if str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')) != 'nan' else 0
+                    dt_in = parse_thai_date(row.get(t_date_col))
+                    nxt_dt = dt_in + timedelta(days=int(p_mo * 30.44)) if pd.notna(dt_in) else None
+                    return pd.Series([km_in + p_km, nxt_dt, ", ".join(items), km_in, dt_in])
 
-                df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calculate_service, axis=1)
+                df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calc_serv, axis=1)
 
+                # --- ตรวจสอบสถานะ ---
                 today = datetime.now()
-                def get_status(row):
+                def check_status(row):
                     if row['ไมล์ปัจจุบัน'] == 0: return "🔍 ไม่พบข้อมูลไมล์"
-                    diff_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
-                    diff_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
-                    if diff_km <= 0 or diff_days <= 0: return f"🔴 ถึงกำหนด ({row['รายการ']})"
-                    elif diff_km <= 1000 or diff_days <= 15: return f"🟡 ใกล้ถึง (เหลือ {int(diff_km):,} กม.)"
+                    d_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
+                    d_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
+                    if d_km <= 0 or d_days <= 0: return f"🔴 ถึงกำหนด ({row['รายการ']})"
+                    elif d_km <= 1000 or d_days <= 15: return f"🟡 ใกล้ถึง (เหลือ {int(d_km):,} กม.)"
                     return "🟢 ปกติ"
 
-                df_new['สถานะการแจ้งเตือน'] = df_new.apply(get_status, axis=1)
+                df_new['สถานะการแจ้งเตือน'] = df_new.apply(check_status, axis=1)
 
-                # --- Merge กับ Email Config (Match ด้วยชื่อ) ---
-                df_final = pd.merge(df_new, df_email, left_on=name_col, right_on='Name', how='left')
+                # --- Merge ข้อมูล Email ---
+                df_final = pd.merge(df_new, df_email, left_on='Name_Match', right_on='Name_Clean', how='left')
 
-            # --- ส่วนแสดงผล Dashboard ---
+            # --- ส่วนแสดงผล ---
             c1, c2, c3 = st.columns(3)
-            red_list = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")]
-            yellow_list = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🟡")]
             c1.metric("รถทั้งหมด", len(df_final))
-            c2.metric("ต้องเข้าศูนย์ด่วน", len(red_list), delta=len(red_list), delta_color="inverse")
-            c3.metric("ใกล้ถึงกำหนด", len(yellow_list))
+            c2.metric("ถึงกำหนด", len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")]))
+            c3.metric("ใกล้ถึง", len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🟡")]))
 
-            # --- ส่วนระบบเตรียม Email ---
-            st.subheader("📧 รายการแจ้งเตือน Email (อ้างอิงไฟล์เงื่อนไข)")
+            st.subheader("📧 รายการแจ้งเตือน Email")
             df_alert = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
             
             if df_alert.empty:
-                st.success("✅ ไม่มีรถที่ถึงกำหนดแจ้งเตือนในขณะนี้")
+                st.success("✅ ไม่มีรายการที่ต้องแจ้งเตือน")
             else:
                 for idx, row in df_alert.iterrows():
                     with st.container():
                         col_t, col_b = st.columns([4, 1])
-                        
-                        # ดึงข้อมูลจากไฟล์ Email
-                        emp_name = row['Name'] if pd.notna(row['Name']) else row[name_col]
+                        # ดึงชื่อจากไฟล์หลักถ้าในไฟล์ Email ไม่มี
+                        display_name = row['Name'] if pd.notna(row['Name']) else row.get(name_col_main, "ไม่ระบุชื่อ")
                         t_to = row['to'] if 'to' in row and pd.notna(row['to']) else ""
                         t_cc = row['CC'] if 'CC' in row and pd.notna(row['CC']) else ""
                         
-                        # แสดงผลบนหน้าเว็บ (แก้ปัญหา nan ที่พี่เจอ)
-                        display_name = emp_name if pd.notna(emp_name) else "ไม่ระบุชื่อ"
                         col_t.write(f"🚗 **{row['ป้ายทะเบียนรถ']}** | 👤 {display_name} | {row['สถานะการแจ้งเตือน']}")
                         
-                        mail_sub = f"แจ้งเตือนซ่อมบำรุงรถยนต์: {row['ป้ายทะเบียนรถ']} ({row['สถานะการแจ้งเตือน']})"
-                        
+                        m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
                         if IS_WINDOWS:
-                            mail_body = f"""
-                            <html>
-                            <body>
-                                <h3>เรียน คุณ {display_name}</h3>
-                                <p>รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> มีสถานะ: {row['สถานะการแจ้งเตือน']}</p>
-                                <p>ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.</p>
-                                <p>รายการที่ตรวจพบ: {row['รายการ']}</p>
-                                <p>กรุณาติดต่อศูนย์บริการเพื่อรักษาสภาพรถยนต์ของท่าน</p>
-                            </body>
-                            </html>
-                            """
+                            m_body = f"เรียน คุณ {display_name}<br><br>รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> {row['สถานะการแจ้งเตือน']}<br>ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,}"
                             if col_b.button(f"Preview", key=f"btn_{idx}"):
-                                if not t_to: st.error("ไม่พบ Email ผู้รับ"); continue
-                                preview_outlook_windows(t_to, t_cc, mail_sub, mail_body)
+                                preview_outlook_windows(t_to, t_cc, m_sub, m_body)
                         else:
-                            mail_plain = f"เรียน คุณ {display_name}\n\nรถทะเบียน {row['ป้ายทะเบียนรถ']} {row['สถานะการแจ้งเตือน']}\nไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.\nกรุณานำรถเข้าศูนย์บริการ"
-                            mailto_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(mail_sub)}&body={urllib.parse.quote(mail_plain)}"
-                            col_b.markdown(f'<a href="{mailto_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;">Open</button></a>', unsafe_allow_html=True)
+                            m_plain = f"เรียน คุณ {display_name}\n\nรถทะเบียน {row['ป้ายทะเบียนรถ']} {row['สถานะการแจ้งเตือน']}\nไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,}"
+                            m_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(m_plain)}"
+                            col_b.markdown(f'<a href="{m_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;">Open</button></a>', unsafe_allow_html=True)
 
-            # --- ดาวน์โหลดรายงาน ---
             st.divider()
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False)
-            st.download_button("📥 ดาวน์โหลดรายงานสรุป (.xlsx)", output.getvalue(), "Service_Audit_Final.xlsx")
+            st.download_button("📥 ดาวน์โหลด Service_Audit_Final.xlsx", output.getvalue(), "Service_Audit_Final.xlsx")
 
         except Exception as e:
-            st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล: {e}")
-
-if not IS_WINDOWS:
-    st.info("💡 ระบบตรวจพบว่าไม่ได้รันบน Windows: ปุ่มจะเปลี่ยนเป็น 'Open' เพื่อเปิด Outlook ผ่านเบราว์เซอร์แทน")
+            st.error(f"❌ Error: {e}")
