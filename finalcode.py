@@ -1,194 +1,89 @@
 import streamlit as st
 import pandas as pd
-import re
-from datetime import datetime, timedelta
+import win32com.client as win32 # สำหรับคุม Outlook
 import io
-import plotly.express as px
+from datetime import datetime
 
-# --- ตั้งค่า UI ---
-st.set_page_config(page_title="CMS Service Audit Dashboard", page_icon="🚗", layout="wide")
-
-st.title("🚗 ระบบบริหารจัดการกำหนดซ่อมบำรุงรถยนต์ (Smart Alert)")
-st.write(f"📅 วันที่ปัจจุบัน (ค.ศ.): {datetime.now().strftime('%d/%m/%Y')}")
-
-# --- ส่วนของฟังก์ชันตัวช่วย (Helper Functions) ---
-
-def clean_plate(text):
-    if pd.isna(text): return ""
-    text = str(text).replace(" ", "").replace("-", "").strip()
-    match = re.search(r'(\d{6,7}|\d?[ก-ฮ]{2,3}\d{1,4})', text)
-    return match.group(1) if match else text[:7]
-
-def parse_thai_date(date_val):
-    if pd.isna(date_val): return pd.NaT
+# --- ฟังก์ชันสำหรับเปิด Outlook Preview ---
+def preview_outlook_email(to_email, cc_email, subject, body):
     try:
-        if isinstance(date_val, datetime):
-            if date_val.year > 2500:
-                return date_val.replace(year=date_val.year - 543)
-            return date_val
-        
-        date_str = str(date_val).strip()
-        for fmt in ('%d-%m-%Y', '%d/%m/%Y', '%d-%m-%y', '%d/%m/%y'):
-            try:
-                dt = datetime.strptime(date_str, fmt)
-                if dt.year > 2500:
-                    dt = dt.replace(year=dt.year - 543)
-                return dt
-            except:
-                continue
-        return pd.to_datetime(date_val, dayfirst=True, errors='coerce')
-    except:
-        return pd.NaT
+        outlook = win32.Dispatch('outlook.application')
+        mail = outlook.CreateItem(0)
+        mail.To = to_email
+        mail.CC = cc_email
+        mail.Subject = subject
+        mail.HTMLBody = body
+        # ใช้ .Display() เพื่อให้หน้าต่างเด้งขึ้นมาพรีวิว (ไม่ส่งทันที)
+        mail.Display()
+        return True
+    except Exception as e:
+        st.error(f"ไม่สามารถเปิด Outlook ได้: {e}")
+        return False
 
-# --- ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (ปุ่มอัปเดต/จัดระเบียบข้อมูล) ---
-st.subheader("🛠️ ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (จัดระเบียบข้อมูลก่อน)")
-with st.expander("🪄 คลิกเพื่อใช้งานเครื่องมือจัดกลุ่มทะเบียนรถ (Input_Service_Sorted)"):
-    st.info("ใช้สำหรับจัดกลุ่มรถทะเบียนเดียวกันให้อยู่ติดกัน และเรียงวันที่จากเก่าไปใหม่ เพื่อให้ดูง่ายและระบบแม่นยำขึ้น")
-    prep_file = st.file_uploader("อัปโหลดไฟล์ Input_Service_Data.xlsx เพื่อจัดระเบียบ", type=['xlsx'], key="prep_tool")
-    
-    if prep_file:
-        if st.button("🚀 กดจัดกลุ่มข้อมูล"):
-            try:
-                # อ่านไฟล์เดิม (ข้าม 2 แถวแรกตามโครงสร้าง CMS)
-                df_prep = pd.read_excel(prep_file, skiprows=2)
-                df_prep.columns = df_prep.columns.str.strip()
-                
-                # หาคอลัมน์วันที่
-                p_date_col = 'วันที่เข้าศูนย์บริการ'
-                if p_date_col not in df_prep.columns:
-                    for c in df_prep.columns:
-                        if 'วันที่' in str(c): p_date_col = c; break
-                
-                # เรียงข้อมูล: ทะเบียนรถ (ก-ฮ) และ วันที่ (เก่า -> ใหม่)
-                df_prep['tmp_date'] = df_prep[p_date_col].apply(parse_thai_date)
-                df_prep = df_prep.sort_values(by=['ป้ายทะเบียนรถ', 'tmp_date'], ascending=[True, True])
-                df_prep = df_prep.drop(columns=['tmp_date'])
-                
-                # สร้างไฟล์ส่งกลับ
-                output_prep = io.BytesIO()
-                with pd.ExcelWriter(output_prep, engine='xlsxwriter') as writer:
-                    df_prep.to_excel(writer, index=False, startrow=2) # เขียนเริ่มแถวที่ 3
-                
-                st.success("✅ จัดระเบียบเสร็จแล้ว! กรุณาดาวน์โหลดไฟล์นี้ไปใช้ในขั้นตอนที่ 1 ด้านล่าง")
-                st.download_button(
-                    label="📥 ดาวน์โหลดไฟล์ที่จัดระเบียบแล้ว (Sorted)",
-                    data=output_prep.getvalue(),
-                    file_name="Input_Service_Sorted.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
-            except Exception as e:
-                st.error(f"❌ เกิดข้อผิดพลาด: {e}")
-
-st.divider()
-
-# --- ส่วนของระบบหลัก (Main System) ---
+# --- ปรับปรุงส่วน UI การอัปโหลด (Sidebar) ---
 with st.sidebar:
     st.header("📂 เมนูจัดการข้อมูลระบบหลัก")
     file_input = st.file_uploader("1. ข้อมูลการเข้าศูนย์ (ใช้ไฟล์ที่ Sorted แล้ว)", type=['xlsx'])
     file_mileage = st.file_uploader("2. ข้อมูลเลขไมล์ปัจจุบัน (Mileage)", type=['xlsx'])
     file_logic = st.file_uploader("3. เงื่อนไขการเปลี่ยนอะไหล่ (Logic)", type=['xlsx'])
+    file_email_config = st.file_uploader("4. ไฟล์เงื่อนไข Email (Email.xlsx)", type=['xlsx']) # <--- เพิ่มช่องนี้
     st.divider()
     process_btn = st.button("🚀 เริ่มประมวลผลระบบ")
 
+# --- ภายใน Logic หลังกดปุ่ม process_btn ---
 if process_btn:
-    if not (file_input and file_mileage and file_logic):
-        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบ!")
+    if not (file_input and file_mileage and file_logic and file_email_config):
+        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบรวมถึง Email.xlsx ด้วยครับ!")
     else:
-        try:
-            with st.spinner('กำลังคำนวณ...'):
-                df_logic = pd.read_excel(file_logic)
-                df_m = pd.read_excel(file_mileage, header=2)
-                df_new = pd.read_excel(file_input, skiprows=2)
-                df_new.columns = df_new.columns.str.strip()
+        # ... (โค้ดส่วนคำนวณเดิมของพี่) ...
+        # สมมติว่าได้ df_new ออกมาแล้ว
+        
+        # --- [ส่วนที่เพิ่มใหม่] Logic การเชื่อมข้อมูล Email ---
+        df_email = pd.read_excel(file_email_config, sheet_name='เงื่อนไข') 
+        # ปรับชื่อคอลัมน์ให้ตรงกับไฟล์พี่ (Name, to, CC)
+        df_email.columns = ['Name', 'Email_To', 'Email_CC'] 
+        
+        # Map ข้อมูล Email เข้ากับ df_new (โดยใช้ชื่อคนขับ/ผู้รับผิดชอบเป็น Key)
+        # หมายเหตุ: ใน df_new พี่ต้องมีคอลัมน์ที่เก็บชื่อที่ตรงกับในไฟล์ Email.xlsx นะครับ
+        df_final = pd.merge(df_new, df_email, left_on='ชื่อผู้รับผิดชอบ', right_on='Name', how='left')
 
-                # หาคอลัมน์วันที่
-                target_date_col = 'วันที่เข้าศูนย์บริการ'
-                if target_date_col not in df_new.columns:
-                    for c in df_new.columns:
-                        if 'วันที่' in str(c): target_date_col = c; break
+        # --- ส่วนแสดงผลปุ่มส่งเมล ---
+        st.subheader("📧 ระบบส่งการแจ้งเตือนผ่าน Email")
+        
+        # กรองเฉพาะรถที่ "ถึงกำหนด" (สีแดง) หรือ "ใกล้ถึง" (สีเหลือง)
+        df_to_alert = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")]
 
-                # ดึงไมล์ล่าสุด
-                df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
-                df_m['เลขไมล์สิ้นสุด'] = pd.to_numeric(df_m['เลขไมล์สิ้นสุด'].astype(str).str.replace(',', ''), errors='coerce')
-                mileage_dict = df_m.dropna(subset=['เลขไมล์สิ้นสุด']).groupby('Key')['เลขไมล์สิ้นสุด'].last().to_dict()
+        if not df_to_alert.empty:
+            for index, row in df_to_alert.iterrows():
+                col_info, col_btn = st.columns([4, 1])
                 
-                df_new = df_new.dropna(subset=['ป้ายทะเบียนรถ'])
-                df_new['ทะเบียน_Clean'] = df_new['ป้ายทะเบียนรถ'].apply(clean_plate)
-                df_new['ไมล์ปัจจุบัน'] = df_new['ทะเบียน_Clean'].map(mileage_dict)
-
-                # คำนวณ Logic
-                def calculate_service(row):
-                    detail = str(row.get('รายละเอียดการเข้าศูนย์', '')).lower()
-                    plus_km, plus_mo = 10000.0, 6.0
-                    found_items = []
-                    for _, lg in df_logic.iterrows():
-                        kw = re.sub(r'\(.*\)', '', str(lg['รายการอะไหล่/การบริการ'])).lower().strip()
-                        if kw in detail:
-                            found_items.append(str(lg['รายการอะไหล่/การบริการ']))
-                            if pd.notna(lg['ระยะเปลี่ยนถ่าย (กม.)']): plus_km = min(plus_km, float(lg['ระยะเปลี่ยนถ่าย (กม.)']))
-                            if pd.notna(lg['ระยะเวลา (เดือน)']): plus_mo = min(plus_mo, float(lg['ระยะเวลา (เดือน)']))
-                    
-                    if not found_items: found_items = ["ตรวจเช็คทั่วไป"]
-                    km_val = str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')).replace(',', '')
-                    curr_km = float(km_val) if km_val != 'nan' and km_val.strip() != '' else 0
-                    date_in = parse_thai_date(row.get(target_date_col))
-                    next_date = date_in + timedelta(days=int(plus_mo * 30.44)) if pd.notna(date_in) else None
-                    return pd.Series([curr_km + plus_km, next_date, ", ".join(found_items), curr_km, date_in])
-
-                df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calculate_service, axis=1)
+                # ข้อมูลที่จะใส่ใน Email
+                plate = row['ป้ายทะเบียนรถ']
+                status = row['สถานะการแจ้งเตือน']
+                to_addr = row['Email_To'] if pd.notna(row['Email_To']) else ""
+                cc_addr = row['Email_CC'] if pd.notna(row['Email_CC']) else ""
                 
-                # แจ้งเตือน 3 สี
-                today = datetime.now()
-                def get_status(row):
-                    if pd.isna(row['ไมล์ปัจจุบัน']) or row['ไมล์ปัจจุบัน'] == 0: return "🔍 ไม่พบข้อมูลไมล์"
-                    diff_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
-                    diff_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
-                    if diff_km <= 0 or diff_days <= 0: return f"🔴 ถึงกำหนด ({row['รายการ']})"
-                    elif diff_km <= 1000 or diff_days <= 15: return f"🟡 ใกล้ถึง (เหลือ {int(diff_km):,} กม.)"
-                    else: return "🟢 ปกติ"
-
-                df_new['สถานะการแจ้งเตือน'] = df_new.apply(get_status, axis=1)
+                col_info.write(f"🚗 **ทะเบียน:** {plate} | **สถานะ:** {status} | **ส่งถึง:** {to_addr}")
                 
-                # แปลงตัวเลขเป็น Int
-                for col in ['ไมล์ปัจจุบัน', 'ไมล์นัดหมาย', 'ไมล์ที่เข้าล่าสุด']:
-                    df_new[col] = pd.to_numeric(df_new[col], errors='coerce').fillna(0).astype(int)
-
-            # --- ส่วนแสดงผล ---
-            c1, c2, c3, c4 = st.columns(4)
-            num_red = len(df_new[df_new['สถานะการแจ้งเตือน'].str.contains("🔴")])
-            num_yellow = len(df_new[df_new['สถานะการแจ้งเตือน'].str.contains("🟡")])
-            num_green = len(df_new[df_new['สถานะการแจ้งเตือน'].str.contains("🟢")])
-            c1.metric("รถทั้งหมด", f"{len(df_new)} คัน")
-            c2.metric("ต้องซ่อมด่วน", f"{num_red} คัน", delta=num_red, delta_color="inverse")
-            c3.metric("ใกล้ถึงกำหนด", f"{num_yellow} คัน")
-            c4.metric("สถานะปกติ", f"{num_green} คัน")
-
-            col_chart, col_table = st.columns([1, 2])
-            with col_chart:
-                fig = px.pie(names=['ถึงกำหนด', 'ใกล้ถึง', 'ปกติ'], values=[num_red, num_yellow, num_green],
-                             color=['ถึงกำหนด', 'ใกล้ถึง', 'ปกติ'],
-                             color_discrete_map={'ถึงกำหนด':'#EF5350', 'ใกล้ถึง':'#FFB74D', 'ปกติ':'#66BB6A'})
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col_table:
-                st.write("📋 ตารางสถานะ")
-                output_cols = ['ป้ายทะเบียนรถ', 'วันที่เข้าล่าสุด', 'ไมล์ที่เข้าล่าสุด', 'ไมล์ปัจจุบัน', 'สถานะการแจ้งเตือน']
-                df_show = df_new[output_cols].copy()
-                df_show['วันที่เข้าล่าสุด'] = df_show['วันที่เข้าล่าสุด'].apply(lambda x: f"{x.day:02d}/{x.month:02d}/{x.year + 543}" if pd.notnull(x) else "ไม่ระบุ")
-                
-                def color_row(val):
-                    if '🔴' in val: return 'background-color: #ffebee'
-                    if '🟡' in val: return 'background-color: #fff3e0'
-                    if '🟢' in val: return 'background-color: #e8f5e9'
-                    return ''
-                
-                st.dataframe(df_show.style.applymap(color_row, subset=['สถานะการแจ้งเตือน'])
-                             .format({"ไมล์ที่เข้าล่าสุด": "{:,d}", "ไมล์ปัจจุบัน": "{:,d}"}), use_container_width=True)
-
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df_new.to_excel(writer, index=False)
-            st.download_button("📥 ดาวน์โหลดรายงาน (.xlsx)", data=buffer.getvalue(), file_name="Service_Audit_Final.xlsx")
-
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+                if col_btn.button(f"Preview เมลคันนี้ ({plate})", key=f"btn_{index}"):
+                    if to_addr == "":
+                        st.warning(f"คัน {plate} ไม่มีข้อมูล Email ในไฟล์เงื่อนไข")
+                    else:
+                        subject = f"แจ้งเตือนกำหนดซ่อมบำรุงรถยนต์ - ทะเบียน {plate}"
+                        body = f"""
+                        <html>
+                            <body>
+                                <h3>เรียน คุณ {row['Name']}</h3>
+                                <p>ขอแจ้งเตือนสถานะการเข้าซ่อมบำรุงรถยนต์ทะเบียน <b>{plate}</b></p>
+                                <p>สถานะปัจจุบัน: <span style="color:red;">{status}</span></p>
+                                <p>เลขไมล์ล่าสุด: {row['ไมล์ที่เข้าล่าสุด']:,} กม.</p>
+                                <p><b>กรุณานำรถเข้าศูนย์บริการตามกำหนด</b></p>
+                                <hr>
+                                <p>ระบบ Smart Alert (CMS Service Audit)</p>
+                            </body>
+                        </html>
+                        """
+                        preview_outlook_email(to_addr, cc_addr, subject, body)
+                        st.success(f"เปิด Outlook พรีวิวสำหรับทะเบียน {plate} แล้ว")
+        else:
+            st.info("ไม่มีรถที่ต้องส่งแจ้งเตือนในขณะนี้")
