@@ -61,7 +61,7 @@ def preview_outlook_windows(to, cc, subject, body):
 # --- ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (Sort ข้อมูล) ---
 st.subheader("🛠️ ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (จัดระเบียบข้อมูลก่อน)")
 with st.expander("🪄 คลิกเพื่อใช้งานเครื่องมือจัดกลุ่มทะเบียนรถ (Input_Service_Sorted)"):
-    st.info("ใช้สำหรับจัดกลุ่มรถทะเบียนเดียวกันให้อยู่ติดกัน และเรียงวันที่จากเก่าไปใหม่")
+    st.info("ใช้สำหรับจัดกลุ่มรถทะเบียนเดียวกันให้อยู่ติดกัน และเรียงวันที่จากเก่าไปใหม่ เพื่อความแม่นยำ")
     prep_file = st.file_uploader("อัปโหลดไฟล์ Input_Service_Data.xlsx", type=['xlsx'], key="prep_tool")
     
     if prep_file:
@@ -83,7 +83,7 @@ with st.expander("🪄 คลิกเพื่อใช้งานเครื
                 with pd.ExcelWriter(output_prep, engine='xlsxwriter') as writer:
                     df_prep.to_excel(writer, index=False, startrow=2)
                 
-                st.success("✅ จัดระเบียบเสร็จแล้ว!")
+                st.success("✅ จัดระเบียบเสร็จแล้ว! กรุณาดาวน์โหลดไปใช้ในขั้นตอนที่ 1")
                 st.download_button("📥 ดาวน์โหลดไฟล์ Sorted", output_prep.getvalue(), "Input_Service_Sorted.xlsx")
             except Exception as e:
                 st.error(f"❌ Error: {e}")
@@ -94,7 +94,7 @@ st.divider()
 with st.sidebar:
     st.header("📂 อัปโหลดข้อมูลระบบหลัก")
     file_input = st.file_uploader("1. ข้อมูลการเข้าศูนย์ (ใช้ไฟล์ Sorted)", type=['xlsx'])
-    file_mileage = st.file_uploader("2. ข้อมูลเลขไมล์ปัจจุบัน", type=['xlsx'])
+    file_mileage = st.file_uploader("2. ข้อมูลเลขไมล์ปัจจุบัน (Mileage)", type=['xlsx'])
     file_logic = st.file_uploader("3. เงื่อนไขอะไหล่ (Logic)", type=['xlsx'])
     file_email = st.file_uploader("4. ข้อมูล Email (Email.xlsx)", type=['xlsx'])
     st.divider()
@@ -102,15 +102,25 @@ with st.sidebar:
 
 if process_btn:
     if not (file_input and file_mileage and file_logic and file_email):
-        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบ!")
+        st.error("⚠️ กรุณาอัปโหลดไฟล์ให้ครบทั้ง 4 ช่อง!")
     else:
         try:
-            with st.spinner('กำลังคำนวณ...'):
+            with st.spinner('กำลังคำนวณและดึงข้อมูล Email...'):
                 df_logic = pd.read_excel(file_logic)
                 df_m = pd.read_excel(file_mileage, header=2)
                 df_new = pd.read_excel(file_input, skiprows=2)
-                df_email = pd.read_excel(file_email)
+                # อ่าน Sheet "เงื่อนไข" ตามภาพที่พี่ส่งมา
+                df_email = pd.read_excel(file_email, sheet_name='เงื่อนไข')
+                
                 df_new.columns = df_new.columns.str.strip()
+                df_email.columns = df_email.columns.str.strip()
+
+                # --- ค้นหาคอลัมน์ชื่อพนักงานในไฟล์หลัก ---
+                name_col = ""
+                potential_cols = ['ชื่อคนขับ', 'ชื่อผู้รับผิดชอบ', 'ชื่อพนักงาน', 'ชื่อ-นามสกุล']
+                for c in potential_cols:
+                    if c in df_new.columns: name_col = c; break
+                if not name_col: name_col = df_new.columns[0] # ถ้าหาไม่เจอเอาคอลัมน์แรก
 
                 # --- Logic ประมวลผลหลัก ---
                 df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
@@ -155,50 +165,68 @@ if process_btn:
 
                 df_new['สถานะการแจ้งเตือน'] = df_new.apply(get_status, axis=1)
 
-                # --- Merge ข้อมูล Email ---
-                # พี่เช็คชื่อคอลัมน์ในไฟล์หลักที่ใช้ Match กับ Name ใน Email.xlsx นะครับ (ตัวอย่างใช้ 'ป้ายทะเบียนรถ' หรือ 'ชื่อผู้รับผิดชอบ')
-                match_col = 'ป้ายทะเบียนรถ' # หรือเปลี่ยนเป็น 'ชื่อพนักงาน' ตามจริง
-                if 'Name' in df_email.columns:
-                    df_final = pd.merge(df_new, df_email, left_on=match_col, right_on='Name', how='left')
-                else:
-                    df_final = df_new.copy()
-                    st.warning("⚠️ คอลัมน์ 'Name' ไม่พบในไฟล์ Email.xlsx")
+                # --- Merge กับ Email Config (Match ด้วยชื่อ) ---
+                df_final = pd.merge(df_new, df_email, left_on=name_col, right_on='Name', how='left')
 
-            # --- ส่วนแสดงผล Dashboard & Table ---
+            # --- ส่วนแสดงผล Dashboard ---
             c1, c2, c3 = st.columns(3)
-            red_n = len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")])
-            yellow_n = len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🟡")])
+            red_list = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")]
+            yellow_list = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🟡")]
             c1.metric("รถทั้งหมด", len(df_final))
-            c2.metric("ถึงกำหนด", red_n)
-            c3.metric("ใกล้ถึง", yellow_n)
+            c2.metric("ต้องเข้าศูนย์ด่วน", len(red_list), delta=len(red_list), delta_color="inverse")
+            c3.metric("ใกล้ถึงกำหนด", len(yellow_list))
 
-            # --- ระบบส่ง Email ---
-            st.subheader("📧 เตรียมแจ้งเตือน Email")
+            # --- ส่วนระบบเตรียม Email ---
+            st.subheader("📧 รายการแจ้งเตือน Email (อ้างอิงไฟล์เงื่อนไข)")
             df_alert = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
             
-            for idx, row in df_alert.iterrows():
-                col_t, col_b = st.columns([4, 1])
-                t_to = row['to'] if 'to' in row and pd.notna(row['to']) else ""
-                t_cc = row['CC'] if 'CC' in row and pd.notna(row['CC']) else ""
-                
-                col_t.write(f"🚗 {row['ป้ายทะเบียนรถ']} | 👤 {row.get('Name', 'ไม่ระบุ')} | {row['สถานะการแจ้งเตือน']}")
-                
-                mail_sub = f"แจ้งเตือนซ่อมบำรุงรถยนต์: {row['ป้ายทะเบียนรถ']}"
-                if IS_WINDOWS:
-                    mail_body = f"เรียน คุณ {row.get('Name','')}<br>รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> ถึงกำหนดเช็คระยะ<br>ไมล์ปัจจุบัน: {row['ไมล์ปัจจุบัน']:,} กม."
-                    if col_b.button(f"Preview", key=f"btn_{idx}"):
-                        preview_outlook_windows(t_to, t_cc, mail_sub, mail_body)
-                else:
-                    mail_plain = f"เรียน คุณ {row.get('Name','')}\nรถทะเบียน {row['ป้ายทะเบียนรถ']} ถึงกำหนดเช็คระยะ\nไมล์ปัจจุบัน: {row['ไมล์ปัจจุบัน']:,} กม."
-                    mailto_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(mail_sub)}&body={urllib.parse.quote(mail_plain)}"
-                    col_b.markdown(f'<a href="{mailto_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;">Open</button></a>', unsafe_allow_html=True)
+            if df_alert.empty:
+                st.success("✅ ไม่มีรถที่ถึงกำหนดแจ้งเตือนในขณะนี้")
+            else:
+                for idx, row in df_alert.iterrows():
+                    with st.container():
+                        col_t, col_b = st.columns([4, 1])
+                        
+                        # ดึงข้อมูลจากไฟล์ Email
+                        emp_name = row['Name'] if pd.notna(row['Name']) else row[name_col]
+                        t_to = row['to'] if 'to' in row and pd.notna(row['to']) else ""
+                        t_cc = row['CC'] if 'CC' in row and pd.notna(row['CC']) else ""
+                        
+                        # แสดงผลบนหน้าเว็บ (แก้ปัญหา nan ที่พี่เจอ)
+                        display_name = emp_name if pd.notna(emp_name) else "ไม่ระบุชื่อ"
+                        col_t.write(f"🚗 **{row['ป้ายทะเบียนรถ']}** | 👤 {display_name} | {row['สถานะการแจ้งเตือน']}")
+                        
+                        mail_sub = f"แจ้งเตือนซ่อมบำรุงรถยนต์: {row['ป้ายทะเบียนรถ']} ({row['สถานะการแจ้งเตือน']})"
+                        
+                        if IS_WINDOWS:
+                            mail_body = f"""
+                            <html>
+                            <body>
+                                <h3>เรียน คุณ {display_name}</h3>
+                                <p>รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> มีสถานะ: {row['สถานะการแจ้งเตือน']}</p>
+                                <p>ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.</p>
+                                <p>รายการที่ตรวจพบ: {row['รายการ']}</p>
+                                <p>กรุณาติดต่อศูนย์บริการเพื่อรักษาสภาพรถยนต์ของท่าน</p>
+                            </body>
+                            </html>
+                            """
+                            if col_b.button(f"Preview", key=f"btn_{idx}"):
+                                if not t_to: st.error("ไม่พบ Email ผู้รับ"); continue
+                                preview_outlook_windows(t_to, t_cc, mail_sub, mail_body)
+                        else:
+                            mail_plain = f"เรียน คุณ {display_name}\n\nรถทะเบียน {row['ป้ายทะเบียนรถ']} {row['สถานะการแจ้งเตือน']}\nไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.\nกรุณานำรถเข้าศูนย์บริการ"
+                            mailto_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(mail_sub)}&body={urllib.parse.quote(mail_plain)}"
+                            col_b.markdown(f'<a href="{mailto_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;">Open</button></a>', unsafe_allow_html=True)
 
-            # --- ปุ่มดาวน์โหลดรายงาน ---
+            # --- ดาวน์โหลดรายงาน ---
             st.divider()
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False)
-            st.download_button("📥 ดาวน์โหลดรายงาน (.xlsx)", buffer.getvalue(), "Service_Audit_Final.xlsx")
+            st.download_button("📥 ดาวน์โหลดรายงานสรุป (.xlsx)", output.getvalue(), "Service_Audit_Final.xlsx")
 
         except Exception as e:
-            st.error(f"❌ Error: {e}")
+            st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล: {e}")
+
+if not IS_WINDOWS:
+    st.info("💡 ระบบตรวจพบว่าไม่ได้รันบน Windows: ปุ่มจะเปลี่ยนเป็น 'Open' เพื่อเปิด Outlook ผ่านเบราว์เซอร์แทน")
