@@ -3,7 +3,6 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 import io
-import plotly.express as px
 import urllib.parse
 import platform
 
@@ -107,23 +106,18 @@ if process_btn:
                 df_new.columns = df_new.columns.str.strip()
                 df_email.columns = df_email.columns.str.strip()
 
-                # --- ค้นหาคอลัมน์ชื่อพนักงานในไฟล์หลัก ---
-                # ปรับให้หาคำว่า 'ชื่อ' หรือ 'พนักงาน' เพื่อความแม่นยำ
                 name_col_main = ""
                 for c in df_new.columns:
                     if any(x in str(c) for x in ['ชื่อ', 'พนักงาน', 'ผู้รับผิดชอบ']):
                         name_col_main = c
                         break
                 
-                # --- เตรียมข้อมูล Email สำหรับ Merge ---
-                # ลบช่องว่างในชื่อทั้งสองฝั่งเพื่อป้องกันการหาไม่เจอ
                 df_email['Name_Clean'] = df_email['Name'].astype(str).str.replace(' ', '').str.strip()
                 if name_col_main:
                     df_new['Name_Match'] = df_new[name_col_main].astype(str).str.replace(' ', '').str.strip()
                 else:
                     df_new['Name_Match'] = ""
 
-                # --- ประมวลผลเลขไมล์ ---
                 df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_m['เลขไมล์สิ้นสุด'] = pd.to_numeric(df_m['เลขไมล์สิ้นสุด'].astype(str).str.replace(',', ''), errors='coerce')
                 mileage_dict = df_m.dropna(subset=['เลขไมล์สิ้นสุด']).groupby('Key')['เลขไมล์สิ้นสุด'].last().to_dict()
@@ -131,7 +125,6 @@ if process_btn:
                 df_new['ทะเบียน_Clean'] = df_new['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_new['ไมล์ปัจจุบัน'] = df_new['ทะเบียน_Clean'].map(mileage_dict).fillna(0)
 
-                # --- คำนวณ Logic งานบริการ ---
                 t_date_col = 'วันที่เข้าศูนย์บริการ'
                 for c in df_new.columns:
                     if 'วันที่' in str(c): t_date_col = c; break
@@ -154,22 +147,21 @@ if process_btn:
 
                 df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calc_serv, axis=1)
 
-                # --- ตรวจสอบสถานะ ---
                 today = datetime.now()
                 def check_status(row):
                     if row['ไมล์ปัจจุบัน'] == 0: return "🔍 ไม่พบข้อมูลไมล์"
                     d_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
                     d_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
-                    if d_km <= 0 or d_days <= 0: return f"🔴 ถึงกำหนด ({row['รายการ']})"
-                    elif d_km <= 1000 or d_days <= 15: return f"🟡 ใกล้ถึง (เหลือ {int(d_km):,} กม.)"
+                    # ปรับปรุง: เพิ่มข้อมูลรายการเข้าไปในสถานะใกล้ถึงด้วย
+                    if d_km <= 0 or d_days <= 0: 
+                        return f"🔴 ถึงกำหนด ({row['รายการ']})"
+                    elif d_km <= 1000 or d_days <= 15: 
+                        return f"🟡 ใกล้ถึง (เหลือ {int(d_km):,} กม.) ({row['รายการ']})"
                     return "🟢 ปกติ"
 
                 df_new['สถานะการแจ้งเตือน'] = df_new.apply(check_status, axis=1)
-
-                # --- Merge ข้อมูล Email ---
                 df_final = pd.merge(df_new, df_email, left_on='Name_Match', right_on='Name_Clean', how='left')
 
-            # --- ส่วนแสดงผล ---
             c1, c2, c3 = st.columns(3)
             c1.metric("รถทั้งหมด", len(df_final))
             c2.metric("ถึงกำหนด", len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")]))
@@ -184,7 +176,6 @@ if process_btn:
                 for idx, row in df_alert.iterrows():
                     with st.container():
                         col_t, col_b = st.columns([4, 1])
-                        # ดึงชื่อจากไฟล์หลักถ้าในไฟล์ Email ไม่มี
                         display_name = row['Name'] if pd.notna(row['Name']) else row.get(name_col_main, "ไม่ระบุชื่อ")
                         t_to = row['to'] if 'to' in row and pd.notna(row['to']) else ""
                         t_cc = row['CC'] if 'CC' in row and pd.notna(row['CC']) else ""
@@ -192,13 +183,29 @@ if process_btn:
                         col_t.write(f"🚗 **{row['ป้ายทะเบียนรถ']}** | 👤 {display_name} | {row['สถานะการแจ้งเตือน']}")
                         
                         m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
+                        
+                        # --- ปรับปรุงเนื้อหา Email ให้แสดงข้อมูลครบถ้วน ---
+                        mail_content_body = (
+                            f"เรียน คุณ {display_name}<br><br>"
+                            f"รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> มีสถานะ {row['สถานะการแจ้งเตือน']}<br>"
+                            f"ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.<br>"
+                            f"กำหนดนัดหมายที่: {int(row['ไมล์นัดหมาย']):,} กม.<br>"
+                            f"รายการบริการ: {row['รายการ']}"
+                        )
+                        
+                        mail_plain_body = (
+                            f"เรียน คุณ {display_name}\n\n"
+                            f"รถทะเบียน {row['ป้ายทะเบียนรถ']} มีสถานะ {row['สถานะการแจ้งเตือน']}\n"
+                            f"ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.\n"
+                            f"กำหนดนัดหมายที่: {int(row['ไมล์นัดหมาย']):,} กม.\n"
+                            f"รายการบริการ: {row['รายการ']}"
+                        )
+
                         if IS_WINDOWS:
-                            m_body = f"เรียน คุณ {display_name}<br><br>รถทะเบียน <b>{row['ป้ายทะเบียนรถ']}</b> {row['สถานะการแจ้งเตือน']}<br>ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,}"
                             if col_b.button(f"Preview", key=f"btn_{idx}"):
-                                preview_outlook_windows(t_to, t_cc, m_sub, m_body)
+                                preview_outlook_windows(t_to, t_cc, m_sub, mail_content_body)
                         else:
-                            m_plain = f"เรียน คุณ {display_name}\n\nรถทะเบียน {row['ป้ายทะเบียนรถ']} {row['สถานะการแจ้งเตือน']}\nไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,}"
-                            m_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(m_plain)}"
+                            m_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(mail_plain_body)}"
                             col_b.markdown(f'<a href="{m_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;">Open</button></a>', unsafe_allow_html=True)
 
             st.divider()
