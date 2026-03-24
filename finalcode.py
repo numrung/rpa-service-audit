@@ -156,32 +156,52 @@ if process_btn:
                 df_final = pd.merge(df_new, df_email, left_on='Name_Match', right_on='Name_Clean', how='left')
 
             st.subheader("📧 รายการแจ้งเตือน Email")
-            df_alert = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
+            df_alert = df_final[df_final['status_check'].str.contains("🔴|🟡")].copy() if 'status_check' in df_final else df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
             
             if not df_alert.empty:
-                # --- [ใหม่] ปุ่มสำหรับส่งทั้งหมด ---
-                if IS_WINDOWS:
-                    if st.button("📧 ส่ง Email ทั้งหมด (Send All Alerts)", type="primary"):
-                        count_sent = 0
-                        for _, row in df_alert.iterrows():
-                            d_name = row['Name'] if pd.notna(row['Name']) else row.get(name_col_main, "ไม่ระบุชื่อ")
-                            m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
-                            m_body = (
-                                f"<div style='font-family: Tahoma; font-size: 14px;'>"
-                                f"เรียน คุณ {d_name}<br><br>"
-                                f"รถทะเบียน: <b>{row['ป้ายทะเบียนรถ']}</b><br>"
-                                f"สถานะ: {row['สถานะการแจ้งเตือน']}<br>"
-                                f"--------------------------------------------------<br>"
-                                f"<b>ไมล์ปัจจุบัน:</b> {int(row['ไมล์ปัจจุบัน']):,} กม.<br>"
-                                f"<b>กำหนดนัดหมายที่:</b> {int(row['ไมล์นัดหมาย']):,} กม.<br>"
-                                f"<b>รายการบริการ:</b> {row['รายการ']}<br>"
-                                f"--------------------------------------------------<br></div>"
-                            )
+                # --- ปรับใหม่: ให้ปุ่มส่งทั้งหมดโชว์ตลอดเวลา และแยกออกมาให้เห็นชัดๆ ---
+                st.info(f"💡 พบรายการต้องแจ้งเตือนทั้งหมด {len(df_alert)} รายการ")
+                
+                # สร้าง Column เพื่อวางปุ่มให้ดูสวยงาม
+                col_btn_all, _ = st.columns([1, 2])
+                with col_btn_all:
+                    btn_all = st.button("📧 ส่ง Email ทั้งหมด (Send All Alerts)", type="primary", use_container_width=True)
+                
+                if btn_all:
+                    count_sent = 0
+                    for _, row in df_alert.iterrows():
+                        d_name = row['Name'] if pd.notna(row.get('Name')) else row.get(name_col_main, "ไม่ระบุชื่อ")
+                        m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
+                        
+                        # เนื้อหาแบบ HTML
+                        m_body = (
+                            f"<div style='font-family: Tahoma; font-size: 14px;'>"
+                            f"เรียน คุณ {d_name}<br><br>"
+                            f"รถทะเบียน: <b>{row['ป้ายทะเบียนรถ']}</b><br>"
+                            f"สถานะ: {row['สถานะการแจ้งเตือน']}<br>"
+                            f"--------------------------------------------------<br>"
+                            f"<b>ไมล์ปัจจุบัน:</b> {int(row['ไมล์ปัจจุบัน']):,} กม.<br>"
+                            f"<b>กำหนดนัดหมายที่:</b> {int(row['ไมล์นัดหมาย']):,} กม.<br>"
+                            f"<b>รายการบริการ:</b> {row['รายการ']}<br>"
+                            f"--------------------------------------------------<br></div>"
+                        )
+                        
+                        # ถ้าเป็น Windows ใช้คำสั่ง Outlook โดยตรง
+                        if IS_WINDOWS:
                             if preview_outlook_windows(row.get('to', ''), row.get('CC', ''), m_sub, m_body):
                                 count_sent += 1
+                        else:
+                            # ถ้าไม่ใช่ Windows ให้เปิดผ่าน Web Browser/Default Mail app
+                            m_plain = m_body.replace('<br>', '\n').replace('<b>', '').replace('</b>', '').replace("<div style='font-family: Tahoma; font-size: 14px;'>", "").replace("</div>", "")
+                            m_url = f"mailto:{row.get('to','') or ''}?cc={row.get('CC','') or ''}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(m_plain)}"
+                            st.write(f"🔗 คลิกเพื่อเปิดเมลคันที่ {row['ป้ายทะเบียนรถ']}: [เปิดส่งเมล]({m_url})")
+                            count_sent += 1
+                    
+                    if IS_WINDOWS:
                         st.success(f"🚀 เปิดหน้าต่าง Outlook เรียบร้อยแล้ว {count_sent} รายการ")
-                
+
                 st.divider()
+                # ... ส่วนลูปแสดงรายการทีละคันด้านล่างคงไว้เหมือนเดิม ...
                 for idx, row in df_alert.iterrows():
                     with st.container():
                         col_t, col_b = st.columns([4, 1])
