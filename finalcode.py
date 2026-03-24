@@ -57,9 +57,9 @@ def preview_outlook_windows(to, cc, subject, body):
         st.error(f"Error opening Outlook: {e}")
         return False
 
-# --- ส่วนที่ 0: เครื่องมือเตรียมไฟล์ ---
-st.subheader("🛠️ ส่วนที่ 0: เครื่องมือเตรียมไฟล์")
-with st.expander("🪄 คลิกเพื่อใช้งานเครื่องมือจัดกลุ่มทะเบียนรถ"):
+# --- ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (Sort ข้อมูล) ---
+st.subheader("🛠️ ส่วนที่ 0: เครื่องมือเตรียมไฟล์ (จัดระเบียบข้อมูลก่อน)")
+with st.expander("🪄 คลิกเพื่อใช้งานเครื่องมือจัดกลุ่มทะเบียนรถ (Input_Service_Sorted)"):
     prep_file = st.file_uploader("อัปโหลดไฟล์ Input_Service_Data.xlsx", type=['xlsx'], key="prep_tool")
     if prep_file:
         if st.button("🚀 กดจัดกลุ่มข้อมูล"):
@@ -76,7 +76,7 @@ with st.expander("🪄 คลิกเพื่อใช้งานเครื
                 output_prep = io.BytesIO()
                 with pd.ExcelWriter(output_prep, engine='xlsxwriter') as writer:
                     df_prep.to_excel(writer, index=False, startrow=2)
-                st.success("✅ จัดระเบียบเสร็จแล้ว!")
+                st.success("✅ จัดระเบียบเสร็จแล้ว! ดาวน์โหลดไปใช้ในขั้นตอนที่ 1 ได้เลย")
                 st.download_button("📥 ดาวน์โหลดไฟล์ Sorted", output_prep.getvalue(), "Input_Service_Sorted.xlsx")
             except Exception as e: st.error(f"❌ Error: {e}")
 
@@ -85,10 +85,10 @@ st.divider()
 # --- ส่วนของระบบหลัก (Sidebar) ---
 with st.sidebar:
     st.header("📂 อัปโหลดข้อมูลระบบหลัก")
-    file_input = st.file_uploader("1. ข้อมูลการเข้าศูนย์ (Sorted)", type=['xlsx'])
-    file_mileage = st.file_uploader("2. ข้อมูลเลขไมล์ปัจจุบัน", type=['xlsx'])
-    file_logic = st.file_uploader("3. เงื่อนไขอะไหล่", type=['xlsx'])
-    file_email = st.file_uploader("4. ข้อมูล Email.xlsx", type=['xlsx'])
+    file_input = st.file_uploader("1. ข้อมูลการเข้าศูนย์ (ใช้ไฟล์ Sorted)", type=['xlsx'])
+    file_mileage = st.file_uploader("2. ข้อมูลเลขไมล์ปัจจุบัน (Mileage)", type=['xlsx'])
+    file_logic = st.file_uploader("3. เงื่อนไขอะไหล่ (Logic)", type=['xlsx'])
+    file_email = st.file_uploader("4. ข้อมูล Email (Email.xlsx)", type=['xlsx'])
     st.divider()
     process_btn = st.button("🚀 เริ่มประมวลผลระบบ")
 
@@ -109,10 +109,14 @@ if process_btn:
                 name_col_main = ""
                 for c in df_new.columns:
                     if any(x in str(c) for x in ['ชื่อ', 'พนักงาน', 'ผู้รับผิดชอบ']):
-                        name_col_main = c; break
+                        name_col_main = c
+                        break
                 
                 df_email['Name_Clean'] = df_email['Name'].astype(str).str.replace(' ', '').str.strip()
-                df_new['Name_Match'] = df_new[name_col_main].astype(str).str.replace(' ', '').str.strip() if name_col_main else ""
+                if name_col_main:
+                    df_new['Name_Match'] = df_new[name_col_main].astype(str).str.replace(' ', '').str.strip()
+                else:
+                    df_new['Name_Match'] = ""
 
                 df_m['Key'] = df_m['ป้ายทะเบียนรถ'].apply(clean_plate)
                 df_m['เลขไมล์สิ้นสุด'] = pd.to_numeric(df_m['เลขไมล์สิ้นสุด'].astype(str).str.replace(',', ''), errors='coerce')
@@ -139,98 +143,80 @@ if process_btn:
                     km_in = float(str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')).replace(',', '')) if str(row.get('เลขไมล์ที่เข้าศูนย์บริการ', '0')) != 'nan' else 0
                     dt_in = parse_thai_date(row.get(t_date_col))
                     nxt_dt = dt_in + timedelta(days=int(p_mo * 30.44)) if pd.notna(dt_in) else None
-                    return pd.Series([km_in + p_km, nxt_dt, ", ".join(items)])
+                    return pd.Series([km_in + p_km, nxt_dt, ", ".join(items), km_in, dt_in])
 
-                df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ']] = df_new.apply(calc_serv, axis=1)
+                df_new[['ไมล์นัดหมาย', 'วันที่นัดหมาย', 'รายการ', 'ไมล์ที่เข้าล่าสุด', 'วันที่เข้าล่าสุด']] = df_new.apply(calc_serv, axis=1)
 
                 today = datetime.now()
                 def check_status(row):
                     if row['ไมล์ปัจจุบัน'] == 0: return "🔍 ไม่พบข้อมูลไมล์"
                     d_km = row['ไมล์นัดหมาย'] - row['ไมล์ปัจจุบัน']
                     d_days = (row['วันที่นัดหมาย'] - today).days if pd.notna(row['วันที่นัดหมาย']) else 999
-                    if d_km <= 0 or d_days <= 0: return f"🔴 ถึงกำหนด ({row['รายการ']})"
-                    elif d_km <= 1000 or d_days <= 15: return f"🟡 ใกล้ถึง (เหลือ {int(d_km):,} กม.) ({row['รายการ']})"
+                    if d_km <= 0 or d_days <= 0: 
+                        return f"🔴 ถึงกำหนด ({row['รายการ']})"
+                    elif d_km <= 1000 or d_days <= 15: 
+                        return f"🟡 ใกล้ถึง (เหลือ {int(d_km):,} กม.) ({row['รายการ']})"
                     return "🟢 ปกติ"
 
                 df_new['สถานะการแจ้งเตือน'] = df_new.apply(check_status, axis=1)
                 df_final = pd.merge(df_new, df_email, left_on='Name_Match', right_on='Name_Clean', how='left')
 
+            c1, c2, c3 = st.columns(3)
+            c1.metric("รถทั้งหมด", len(df_final))
+            c2.metric("ถึงกำหนด", len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴")]))
+            c3.metric("ใกล้ถึง", len(df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🟡")]))
+
             st.subheader("📧 รายการแจ้งเตือน Email")
-            df_alert = df_final[df_final['status_check'].str.contains("🔴|🟡")].copy() if 'status_check' in df_final else df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
+            df_alert = df_final[df_final['สถานะการแจ้งเตือน'].str.contains("🔴|🟡")].copy()
             
-            if not df_alert.empty:
-                # --- ปรับใหม่: ให้ปุ่มส่งทั้งหมดโชว์ตลอดเวลา และแยกออกมาให้เห็นชัดๆ ---
-                st.info(f"💡 พบรายการต้องแจ้งเตือนทั้งหมด {len(df_alert)} รายการ")
-                
-                # สร้าง Column เพื่อวางปุ่มให้ดูสวยงาม
-                col_btn_all, _ = st.columns([1, 2])
-                with col_btn_all:
-                    btn_all = st.button("📧 ส่ง Email ทั้งหมด (Send All Alerts)", type="primary", use_container_width=True)
-                
-                if btn_all:
-                    count_sent = 0
-                    for _, row in df_alert.iterrows():
-                        d_name = row['Name'] if pd.notna(row.get('Name')) else row.get(name_col_main, "ไม่ระบุชื่อ")
+            if df_alert.empty:
+                st.success("✅ ไม่มีรายการที่ต้องแจ้งเตือน")
+            else:
+                for idx, row in df_alert.iterrows():
+                    with st.container():
+                        col_t, col_b = st.columns([4, 1])
+                        display_name = row['Name'] if pd.notna(row['Name']) else row.get(name_col_main, "ไม่ระบุชื่อ")
+                        t_to = row['to'] if 'to' in row and pd.notna(row['to']) else ""
+                        t_cc = row['CC'] if 'CC' in row and pd.notna(row['CC']) else ""
+                        
+                        col_t.write(f"🚗 **{row['ป้ายทะเบียนรถ']}** | 👤 {display_name} | {row['สถานะการแจ้งเตือน']}")
+                        
                         m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
                         
-                        # เนื้อหาแบบ HTML
-                        m_body = (
-                            f"<div style='font-family: Tahoma; font-size: 14px;'>"
-                            f"เรียน คุณ {d_name}<br><br>"
+                        # --- ปรับปรุงเนื้อหา Email ให้อ่านง่ายและครบถ้วน ---
+                        # แบบ HTML สำหรับ Preview
+                        mail_content_body = (
+                            f"<div style='font-family: Tahoma, sans-serif; font-size: 14px;'>"
+                            f"เรียน คุณ {display_name}<br><br>"
                             f"รถทะเบียน: <b>{row['ป้ายทะเบียนรถ']}</b><br>"
                             f"สถานะ: {row['สถานะการแจ้งเตือน']}<br>"
                             f"--------------------------------------------------<br>"
                             f"<b>ไมล์ปัจจุบัน:</b> {int(row['ไมล์ปัจจุบัน']):,} กม.<br>"
                             f"<b>กำหนดนัดหมายที่:</b> {int(row['ไมล์นัดหมาย']):,} กม.<br>"
                             f"<b>รายการบริการ:</b> {row['รายการ']}<br>"
-                            f"--------------------------------------------------<br></div>"
+                            f"--------------------------------------------------<br>"
+                            f"</div>"
                         )
                         
-                        # ถ้าเป็น Windows ใช้คำสั่ง Outlook โดยตรง
-                        if IS_WINDOWS:
-                            if preview_outlook_windows(row.get('to', ''), row.get('CC', ''), m_sub, m_body):
-                                count_sent += 1
-                        else:
-                            # ถ้าไม่ใช่ Windows ให้เปิดผ่าน Web Browser/Default Mail app
-                            m_plain = m_body.replace('<br>', '\n').replace('<b>', '').replace('</b>', '').replace("<div style='font-family: Tahoma; font-size: 14px;'>", "").replace("</div>", "")
-                            m_url = f"mailto:{row.get('to','') or ''}?cc={row.get('CC','') or ''}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(m_plain)}"
-                            st.write(f"🔗 คลิกเพื่อเปิดเมลคันที่ {row['ป้ายทะเบียนรถ']}: [เปิดส่งเมล]({m_url})")
-                            count_sent += 1
-                    
-                    if IS_WINDOWS:
-                        st.success(f"🚀 เปิดหน้าต่าง Outlook เรียบร้อยแล้ว {count_sent} รายการ")
-
-                st.divider()
-                # ... ส่วนลูปแสดงรายการทีละคันด้านล่างคงไว้เหมือนเดิม ...
-                for idx, row in df_alert.iterrows():
-                    with st.container():
-                        col_t, col_b = st.columns([4, 1])
-                        display_name = row['Name'] if pd.notna(row['Name']) else row.get(name_col_main, "ไม่ระบุชื่อ")
-                        m_sub = f"แจ้งเตือนซ่อมบำรุง: {row['ป้ายทะเบียนรถ']}"
-                        
-                        col_t.write(f"🚗 **{row['ป้ายทะเบียนรถ']}** | 👤 {display_name} | {row['สถานะการแจ้งเตือน']}")
-                        
-                        m_html = (f"<div style='font-family: Tahoma; font-size: 14px;'>เรียน คุณ {display_name}<br><br>"
-                                  f"รถทะเบียน: <b>{row['ป้ายทะเบียนรถ']}</b><br>สถานะ: {row['สถานะการแจ้งเตือน']}<br>"
-                                  f"--------------------------------------------------<br>"
-                                  f"<b>ไมล์ปัจจุบัน:</b> {int(row['ไมล์ปัจจุบัน']):,} กม.<br>"
-                                  f"<b>กำหนดนัดหมายที่:</b> {int(row['ไมล์นัดหมาย']):,} กม.<br>"
-                                  f"<b>รายการบริการ:</b> {row['รายการ']}<br>"
-                                  f"--------------------------------------------------<br></div>")
-                        
-                        m_plain = (f"เรียน คุณ {display_name}\n\nรถทะเบียน: {row['ป้ายทะเบียนรถ']}\nสถานะ: {row['สถานะการแจ้งเตือน']}\n"
-                                   f"--------------------------------------------------\n"
-                                   f"ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.\nกำหนดนัดหมายที่: {int(row['ไมล์นัดหมาย']):,} กม.\n"
-                                   f"รายการบริการ: {row['รายการ']}\n--------------------------------------------------")
+                        # แบบ Plain Text สำหรับ Mailto/Open (แก้ปัญหา Subject เกิน)
+                        mail_plain_body = (
+                            f"เรียน คุณ {display_name}\n\n"
+                            f"รถทะเบียน: {row['ป้ายทะเบียนรถ']}\n"
+                            f"สถานะ: {row['สถานะการแจ้งเตือน']}\n"
+                            f"--------------------------------------------------\n"
+                            f"ไมล์ปัจจุบัน: {int(row['ไมล์ปัจจุบัน']):,} กม.\n"
+                            f"กำหนดนัดหมายที่: {int(row['ไมล์นัดหมาย']):,} กม.\n"
+                            f"รายการบริการ: {row['รายการ']}\n"
+                            f"--------------------------------------------------\n"
+                        )
 
                         if IS_WINDOWS:
                             if col_b.button(f"Preview", key=f"btn_{idx}"):
-                                preview_outlook_windows(row.get('to', ''), row.get('CC', ''), m_sub, m_html)
+                                preview_outlook_windows(t_to, t_cc, m_sub, mail_content_body)
                         else:
-                            m_url = f"mailto:{row.get('to','') or ''}?cc={row.get('CC','') or ''}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(m_plain)}"
+                            # ปรับปรุง URL ให้หัวข้อเมลสะอาด
+                            m_url = f"mailto:{t_to}?cc={t_cc}&subject={urllib.parse.quote(m_sub)}&body={urllib.parse.quote(mail_plain_body)}"
                             col_b.markdown(f'<a href="{m_url}"><button style="background-color:#0078d4;color:white;border:none;border-radius:5px;padding:5px 10px;cursor:pointer;width:100%;">Open</button></a>', unsafe_allow_html=True)
-            else:
-                st.success("✅ ไม่มีรายการที่ต้องแจ้งเตือน")
 
             st.divider()
             output = io.BytesIO()
